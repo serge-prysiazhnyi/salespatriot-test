@@ -40,6 +40,33 @@ The filters follow the questions a vendor asks, in this order:
 All filters live in the URL, so **a bookmark is a saved search** (e.g. "my FSCs, small business, open").
 Clicking an FSC in the table narrows to that class.
 
+## Database indexes
+
+Defined in `schema.sql`. Plans checked with `EXPLAIN ANALYZE` on the app's real queries (44,860 rows):
+
+| Index | Used for | Measured |
+|---|---|---|
+| Primary key `(solicitation, pr)` | Duplicate check in every import upsert; exact solicitation lookups | 0.1 ms |
+| `rfqs_return_by` | Default view (open, soonest deadline first); "closing within N days" | 2–4 ms |
+| `rfqs_posted_date` | "Newest posted" sort; "Posted on" filter | 0.6–7 ms |
+| `rfqs_fsc` | FSC filter | under 1 ms |
+
+Postgres picks per query. With the default deadline sort it walks `rfqs_return_by` in order and checks
+the FSC or posted-day filter on each row, so the rows come out sorted and it stops after 50. With other
+sorts it uses `rfqs_fsc` / `rfqs_posted_date` directly to pick the matching rows, often combined with
+`rfqs_return_by`.
+
+Not indexed, on purpose:
+
+- **Free-text search** (`nomenclature ILIKE '%valve%'`): a B-tree can't help when the pattern starts with `%`.
+  It's the slowest query at about 14 ms. At millions of rows, add `pg_trgm` with a GIN index on `nomenclature`.
+- **Set-aside, AMSC, solicitation type:** only a few values each, and one value covers most rows
+  (85% are unrestricted), so an index barely helps.
+
+Pagination is `LIMIT`/`OFFSET`, which keeps "Page X of Y" and page numbers in the URL. The last page of
+all 44,860 rows loads in about 50 ms. At much larger scale, switch to cursor paging on
+`(return_by, solicitation, pr)`.
+
 ## Tradeoffs / left out
 
 - Server-rendered HTML instead of React: one process, no build, shareable URLs, about 15 lines of client JS.
