@@ -13,6 +13,7 @@ cp .env.example .env   # set the database login and password
 npm run db      # Postgres in Docker on localhost:5434, schema applied
 npm run pull    # import every day DIBBS lists (~40 s first time, then only new days)
 npm start       # http://localhost:8787
+npm test        # unit tests (no database or network needed)
 ```
 
 ## How the data is pulled
@@ -67,13 +68,27 @@ Pagination is `LIMIT`/`OFFSET`, which keeps "Page X of Y" and page numbers in th
 all 44,860 rows loads in about 50 ms. At much larger scale, switch to cursor paging on
 `(return_by, solicitation, pr)`.
 
+## Tests
+
+`npm test` runs 22 unit tests with Node's built-in test runner (`node:test`, no extra dependencies) in under a second.
+They cover only the critical paths:
+
+- **Parsing** (`test/parse.test.ts`): every field of a real DIBBS line, part numbers, blank set-aside, and the
+  format checks that stop an import when DIBBS changes the file layout.
+- **Search SQL** (`test/search.test.ts`): user text only reaches SQL as parameters, the ORDER BY allow-list,
+  junk input falling back to defaults, dash stripping, literal `%`/`_`, impossible dates, page offsets.
+- **Output** (`test/views.test.ts`): HTML escaping and the links back to DIBBS.
+
+Not covered: the DIBBS HTTP client (consent, retries) and the import into Postgres. Those were checked by hand
+against a local fake server and the real site; an integration test with a test database would be next.
+
 ## Tradeoffs / left out
 
 - Server-rendered HTML instead of React: one process, no build, shareable URLs, about 15 lines of client JS.
 - No ORM or migrations tool: `schema.sql` with `IF NOT EXISTS`, plus parameterized SQL and an allow-list for ORDER BY.
 - **Today's RFQs appear tomorrow:** DIBBS publishes a day's index file after the day ends. The fix would be paging the
   search grid for the current day only.
-- No "Technical documents" or "Mil-Spec" flags (those are only in the grid), no auth, no tests, no scheduler
+- No "Technical documents" or "Mil-Spec" flags (those are only in the grid), no auth, no scheduler
   (use cron: `0 6 * * * npm run pull`).
 - Next ideas: saved vendor profiles with "new matches since last visit", FSC names, a trigram index for search at
   larger scale, and an email digest.

@@ -51,7 +51,8 @@ export function readFilters(query: Query): Filters {
   };
 }
 
-export async function searchRfqs(f: Filters) {
+// Builds the SQL text and its parameters. Pure (no DB), so it can be unit-tested.
+export function buildSearchQuery(f: Filters): { sql: string; params: unknown[] } {
   const where: string[] = [];
   const params: unknown[] = [];
   const add = (sql: string, value: unknown) => {
@@ -81,13 +82,16 @@ export async function searchRfqs(f: Filters) {
 
   const whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
   params.push(PAGE_SIZE, (f.page - 1) * PAGE_SIZE);
-  const { rows } = await db.query(
-    `SELECT *, return_by - CURRENT_DATE AS days_left, count(*) OVER() AS total
+  const sql = `SELECT *, return_by - CURRENT_DATE AS days_left, count(*) OVER() AS total
      FROM rfqs ${whereSql}
      ORDER BY ${SORTS[f.sort].sql}
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params,
-  );
+     LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  return { sql, params };
+}
+
+export async function searchRfqs(f: Filters) {
+  const { sql, params } = buildSearchQuery(f);
+  const { rows } = await db.query(sql, params);
   return { rows, total: rows.length ? Number(rows[0].total) : 0 };
 }
 
