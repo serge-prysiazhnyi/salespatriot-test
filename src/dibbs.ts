@@ -22,6 +22,37 @@ function cookieHeader(url: string) {
 
 type Page = { url: string; text: string; status: number };
 
+const TIMEOUT_MS = 30_000; // per attempt, including reading the body
+const RETRIES = 3; // after the first attempt: waits ~1 s, 2 s, 4 s
+const BASE_DELAY_MS = 1000;
+
+// Worth retrying: DIBBS is down, overloaded or slow. Other 4xx answers won't change on retry.
+const isRetryableStatus = (status: number) => status === 429 || status >= 500;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// One HTTP call with a timeout, retried with exponential backoff (+ jitter) on network errors,
+// timeouts, 429 and 5xx. After the last attempt the error (or the 5xx response) is passed on.
+async function fetchWithRetry(url: string, init: RequestInit): Promise<{ res: Response; bytes: ArrayBuffer }> {
+  for (let attempt = 0; ; attempt++) {
+    let problem: string;
+    try {
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      const bytes = await res.arrayBuffer();
+      if (!isRetryableStatus(res.status) || attempt === RETRIES) return { res, bytes };
+      problem = `HTTP ${res.status}`;
+    } catch (err) {
+      // fetch only says "fetch failed"; the real reason (ECONNREFUSED, ENOTFOUND, ...) is in err.cause.
+      const e = err as Error & { cause?: { code?: string } };
+      problem = e.name === "TimeoutError" ? `timeout after ${TIMEOUT_MS / 1000}s` : e.cause?.code ?? e.message;
+      if (attempt === RETRIES) throw new Error(`${problem} for ${url}`, { cause: err });
+    }
+    const delay = BASE_DELAY_MS * 2 ** attempt + Math.random() * 250;
+    console.warn(`retry ${attempt + 1}/${RETRIES} in ${(delay / 1000).toFixed(1)}s: ${problem} for ${url}`);
+    await sleep(delay);
+  }
+}
+
 // The consent cookie is set on a redirect response, so redirects are followed manually.
 async function request(url: string, method = "GET", body?: string): Promise<Page> {
   for (let hop = 0; hop < 10; hop++) {
@@ -30,7 +61,7 @@ async function request(url: string, method = "GET", body?: string): Promise<Page
       Cookie: cookieHeader(url),
     };
     if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
-    const res = await fetch(url, { method, headers, body, redirect: "manual" });
+    const { res, bytes } = await fetchWithRetry(url, { method, headers, body, redirect: "manual" });
     rememberCookies(url, res);
     const location = res.headers.get("location");
     if (res.status >= 300 && res.status < 400 && location) {
@@ -40,7 +71,7 @@ async function request(url: string, method = "GET", body?: string): Promise<Page
       continue;
     }
     // DIBBS serves ISO-8859-1.
-    const text = new TextDecoder("latin1").decode(await res.arrayBuffer());
+    const text = new TextDecoder("latin1").decode(bytes);
     return { url, text, status: res.status };
   }
   throw new Error("Too many redirects: " + url);
