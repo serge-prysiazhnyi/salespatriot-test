@@ -32,7 +32,8 @@ export const links = {
 // SPE1C127Q0101 -> SPE1C1-27-Q-0101, 8345001516486 -> 8345-00-151-6486
 const fmtSol = (s: string) => (s.length === 13 ? `${s.slice(0, 6)}-${s.slice(6, 8)}-${s.slice(8, 9)}-${s.slice(9)}` : s);
 const fmtNsn = (s: string) => (/^\d{13}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 9)}-${s.slice(9)}` : s);
-const fmtDate = (d: string) => `${d.slice(5, 7)}/${d.slice(8, 10)}`;
+// 2026-10-30 -> 10/30/2026 (same format as DIBBS)
+const fmtDate = (d: string) => `${d.slice(5, 7)}/${d.slice(8, 10)}/${d.slice(0, 4)}`;
 
 // Builds a "?a=b" link from the current filters with some values changed.
 function href(f: Filters, change: Partial<Record<keyof Filters, string | string[] | number>>) {
@@ -77,7 +78,6 @@ function row(r: any, f: Filters) {
 export function renderPage(f: Filters, stats: Stats, result: { rows: any[]; total: number }, flash = "") {
   const pages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   const lastPull = stats.lastPull ? new Date(stats.lastPull).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "never";
-  const newest = stats.days[0]?.date ?? "–";
 
   const setAsideBoxes = stats.setAsides
     .map(({ code, n }) => `<label class="pill"><input type="checkbox" name="set_aside" value="${esc(code)}"${f.set_aside.includes(code) ? " checked" : ""}>
@@ -123,7 +123,7 @@ export function renderPage(f: Filters, stats: Stats, result: { rows: any[]; tota
 <body>
 <header>
   <div><h1>DIBBS RFQ Browser</h1>
-    <div class="meta">${stats.open.toLocaleString("en-US")} open of ${stats.total.toLocaleString("en-US")} RFQs · newest posting ${esc(newest)} · last pull ${esc(lastPull)}</div></div>
+    <div class="meta">${stats.open.toLocaleString("en-US")} open of ${stats.total.toLocaleString("en-US")} RFQs · newest posting ${esc(stats.days[0] ? fmtDate(stats.days[0].date) : "–")} · last pull ${esc(lastPull)}</div></div>
   <form method="post" action="/pull"><button title="Download new daily files from DIBBS">↻ Refresh from DIBBS</button></form>
 </header>
 ${flash ? `<div class="flash">${esc(flash)}</div>` : ""}
@@ -138,7 +138,7 @@ ${flash ? `<div class="flash">${esc(flash)}</div>` : ""}
     ${option("", "Any time", f.closing)}${["2", "5", "10", "20"].map((d) => option(d, `${d} days`, f.closing)).join("")}</select></label>
   <label class="field">Min qty <input name="min_qty" type="number" min="0" value="${esc(f.min_qty)}"></label>
   <label class="field">Posted on <select name="posted">
-    ${option("", "Any day", f.posted)}${stats.days.map((d) => option(d.date, `${d.date} (${d.n})`, f.posted)).join("")}</select></label>
+    ${option("", "Any day", f.posted)}${stats.days.map((d) => option(d.date, `${fmtDate(d.date)} (${d.n})`, f.posted)).join("")}</select></label>
   <label class="field">Type <select name="sol_type">
     ${option("", "Any", f.sol_type)}${Object.entries(SOL_TYPES).map(([k, v]) => option(k, v, f.sol_type)).join("")}</select></label>
   <label class="field">Sort <select name="sort">
