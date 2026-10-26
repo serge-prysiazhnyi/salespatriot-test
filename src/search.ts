@@ -28,9 +28,15 @@ type Query = Record<string, unknown>;
 const one = (v: unknown) => (Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "").trim();
 const many = (v: unknown) => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
 const isInt = (s: string) => /^\d{1,6}$/.test(s);
+// "2026-10-23" yes; "2026-99-99" no (Postgres would reject it with an error).
+const isDate = (s: string) =>
+  /^\d{4}-\d\d-\d\d$/.test(s) && !isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s;
+// Make % and _ match literally in ILIKE (backslash is Postgres' default LIKE escape).
+const escapeLike = (s: string) => s.replace(/[\\%_]/g, "\\$&");
 
 export function readFilters(query: Query): Filters {
-  const page = parseInt(one(query.page), 10);
+  // At most 6 digits: a huge number would become e.g. 5e+22, which Postgres rejects as an OFFSET.
+  const page = isInt(one(query.page)) ? parseInt(one(query.page), 10) : 1;
   return {
     q: one(query.q),
     status: ["open", "closed", "all"].includes(one(query.status)) ? one(query.status) : "open",
@@ -56,9 +62,12 @@ export async function searchRfqs(f: Filters) {
   if (f.q) {
     // Users paste codes with dashes (SPE1C1-27-Q-0101, 8345-00-151-6486); the DB stores them without.
     const code = f.q.replace(/[-\s]/g, "");
-    params.push("%" + code + "%");
+    params.push("%" + escapeLike(code) + "%");
     const codeParam = "$" + params.length;
-    add(`(solicitation ILIKE ${codeParam} OR nsn ILIKE ${codeParam} OR pr ILIKE ${codeParam} OR nomenclature ILIKE ?)`, "%" + f.q + "%");
+    add(
+      `(solicitation ILIKE ${codeParam} OR nsn ILIKE ${codeParam} OR pr ILIKE ${codeParam} OR nomenclature ILIKE ?)`,
+      "%" + escapeLike(f.q) + "%",
+    );
   }
   if (f.status === "open") where.push("return_by >= CURRENT_DATE");
   if (f.status === "closed") where.push("return_by < CURRENT_DATE");
@@ -66,7 +75,7 @@ export async function searchRfqs(f: Filters) {
   if (f.set_aside.length) add("set_aside = ANY(?)", f.set_aside);
   const fscs = f.fsc.split(/[\s,]+/).filter((s) => /^\d{4}$/.test(s));
   if (fscs.length) add("fsc = ANY(?)", fscs);
-  if (/^\d{4}-\d\d-\d\d$/.test(f.posted)) add("posted_date = ?", f.posted);
+  if (isDate(f.posted)) add("posted_date = ?", f.posted);
   if (isInt(f.min_qty)) add("qty >= ?::int", f.min_qty);
   if (f.sol_type) add("sol_type = ?", f.sol_type);
 

@@ -43,5 +43,15 @@ app.post("/pull", async (_req, res) => {
   }
 });
 
+// Last resort for unexpected errors: log the details, show the user a plain message (no stack trace).
+app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(err);
+  if (req.path.startsWith("/api/")) return res.status(500).json({ error: "Internal server error" });
+  res.status(500).send(`<!doctype html><meta charset="utf-8"><title>Error</title>
+    <body style="font:15px system-ui;padding:40px">
+    <h1 style="font-size:20px">Something went wrong</h1>
+    <p>The error has been logged. <a href="/">Back to the RFQ list</a></p></body>`);
+});
+
 await ensureSchema();
 app.listen(PORT, "0.0.0.0", () => console.log(`http://localhost:${PORT}`));
