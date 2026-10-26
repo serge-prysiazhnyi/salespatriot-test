@@ -4,13 +4,14 @@
 import { pathToFileURL } from "node:url";
 import { db, ensureSchema } from "./db.js";
 import { getPage, listIndexFiles } from "./dibbs.js";
-import { LINE_LENGTH, parseLine, postedDateFromFile, type Rfq } from "./parse.js";
+import { parseLine, postedDateFromFile, validateLine, type Rfq } from "./parse.js";
 
 const COLUMNS: (keyof Rfq)[] = [
   "solicitation", "pr", "nsn", "fsc", "nomenclature", "qty", "unit", "return_by", "posted_date",
   "file_name", "buyer_code", "amsc", "item_type", "set_aside", "set_aside_pct", "sol_type",
 ];
 const BATCH_SIZE = 1000; // 16 columns x 1000 rows stays well under Postgres' 65,535 parameter limit
+const MAX_BAD_LINE_SHARE = 0.05; // more than 5% malformed lines = the format probably changed
 
 async function upsertBatch(client: { query: typeof db.query }, rows: Rfq[]) {
   const params: unknown[] = [];
@@ -44,12 +45,28 @@ export async function pullAll({ all = false, log = console.log } = {}) {
     const postedDate = postedDateFromFile(fileName);
     // Dedupe by key: one INSERT can't touch the same (solicitation, pr) twice.
     const byKey = new Map<string, Rfq>();
-    for (const line of text.split(/\r?\n/)) {
-      if (line.length < LINE_LENGTH) continue;
+    const bad: string[] = [];
+    const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+    for (const [i, line] of lines.entries()) {
+      const problem = validateLine(line);
+      if (problem) {
+        bad.push(`line ${i + 1}: ${problem}`);
+        continue;
+      }
       const row = parseLine(line, postedDate);
       byKey.set(row.solicitation + "|" + row.pr, row);
     }
     const rows = [...byKey.values()];
+
+    // Fail loudly if the format changed. Nothing is saved and the day is not marked as pulled,
+    // so the next run tries again. A few odd lines are tolerated and reported.
+    if (rows.length === 0 || bad.length > lines.length * MAX_BAD_LINE_SHARE) {
+      throw new Error(
+        `${fileName}: ${bad.length} of ${lines.length} lines don't match the DIBBS index format ` +
+          `(first: ${bad[0] ?? "no lines"}). Did DIBBS change the file layout?`,
+      );
+    }
+    if (bad.length) log(`${fileName}: skipped ${bad.length} malformed line(s), first: ${bad[0]}`);
 
     // One transaction per file: the day is imported completely or not at all.
     const client = await db.connect();
